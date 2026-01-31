@@ -99,7 +99,7 @@ jobs:
       - name: Set up Docker buildx
         uses: docker/setup-buildx-action@v1
         with:
-          driver: docker
+          driver: docker-container
 
       - name: Initialize cache for storing docker image
         uses: actions/cache@v3
