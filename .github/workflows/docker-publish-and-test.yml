@@ -2,6 +2,8 @@ name: Docker publish
 
 on:
   release:
+    types: [ published ]
+  push:
 
 env:
   REGISTRY: ghcr.io
@@ -10,9 +12,13 @@ env:
   DOCKERFILE_NAME: Dockerfile
   DOCKER_DIR_FOO: foo
   IMAGE_TAG_FOO: foo
+  DOCKER_DIR_BAR: bar
+  IMAGE_TAG_BAR: bar
+  IMAGE_CACHE_DIR_FOO: /tmp/.buildx-cache-foo/
+  IMAGE_TAR_FILE_FOO: image-foo.tar
 
 jobs:
-  build-and-push:
+  build-foo:
     runs-on: ubuntu-latest
 
     permissions:
@@ -23,6 +29,70 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v2
 
+      # Buildx is necessary for exporting images
+      - name: Set up Docker buildx
+        uses: docker/setup-buildx-action@v1
+
+      - name: Initialize cache for storing docker image
+        uses: actions/cache@v3
+        with:
+          path: ${{ env.IMAGE_CACHE_DIR_FOO }}
+          key: ${{ runner.os }}-buildx-${{ github.sha }}-foo
+          restore-keys: |
+            ${{ runner.os }}-buildx-foo-
+
+      - name: Ensure cache dir exists
+        run: if [ ! -d "${{ env.IMAGE_CACHE_DIR_FOO }}" ]; then mkdir ${{ env.IMAGE_CACHE_DIR_FOO }}; fi
+
+      # Extract metadata (tags, labels) for Docker
+      # https://github.com/docker/metadata-action
+      - name: Extract Docker metadata
+        id: meta
+        uses: docker/metadata-action@98669ae865ea3cffbcbaa878cf57c20bbf1c6c38
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+
+      # Build image
+      - name: Build and cache image
+        uses: docker/build-push-action@ad44023a93711e3deb337508980b4b5e9bcdc5dc
+        with:
+          context: docker/${{ env.DOCKER_DIR_FOO }}
+          file: docker/${{ env.DOCKER_DIR_FOO }}/${{ env.DOCKERFILE_NAME }}
+          push: false
+          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG_FOO }}
+          labels: ${{ steps.meta.outputs.labels }}
+          outputs: type=docker,dest=${{ env.IMAGE_CACHE_DIR_FOO }}/${{ env.IMAGE_TAR_FILE_FOO }}
+
+      # List docker images in local repository to confirm exactly what tags were
+      # created
+      - name: List docker images
+        run: docker images
+
+  build-bar:
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v2
+
+      - name: Restore foo docker image cache
+        uses: actions/cache@v3
+        with:
+          path: ${{ env.IMAGE_CACHE_DIR_FOO }}
+          key: ${{ runner.os }}-buildx-${{ github.sha }}-foo
+          restore-keys: |
+            ${{ runner.os }}-buildx-foo
+
+      # Load cached foo docker-formatted tarball into local image
+      # repository
+      - name: Load cached foo docker image tarball
+        run: |
+          docker load -i ${{ env.IMAGE_CACHE_DIR_FOO }}/${{ env.IMAGE_TAR_FILE_FOO }}            
+
       # Use buildx with 'docker' driver so that it is able to access images stored in the
       # local registry (this precludes the possibility of multi-platform images)
       - name: Set up Docker buildx
@@ -30,7 +100,7 @@ jobs:
         with:
           driver: docker
 
-      # Login against a Docker registry except on PR
+      # Login against a Docker registry if releasing
       # https://github.com/docker/login-action
       - name: Log into registry ${{ env.REGISTRY }}
         if: github.event_name == 'release'
@@ -52,11 +122,11 @@ jobs:
       - name: Build and push image
         uses: docker/build-push-action@ad44023a93711e3deb337508980b4b5e9bcdc5dc
         with:
-          context: docker/${{ env.DOCKER_DIR_FOO }}
-          file: docker/${{ env.DOCKER_DIR_FOO }}/${{ env.DOCKERFILE_NAME }}
+          context: docker/${{ env.DOCKER_DIR_BAR }}
+          file: docker/${{ env.DOCKER_DIR_BAR }}/${{ env.DOCKERFILE_NAME }}
           push: ${{ github.event_name == 'release' }}
           build-args: |
-            "IMAGE_INSTALL=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG_FOO }}"
+            "IMAGE_FOO=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG_FOO }}"
           tags: |
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.version }}
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
@@ -65,4 +135,4 @@ jobs:
       # List docker images in local repository to confirm exactly what tags were
       # created
       - name: List docker images
-        run: docker images
+        run: docker images        
